@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shortener</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 16px; color: #1a1a1a; }
+    form { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+    input { padding: 8px 10px; font-size: 1rem; border: 1px solid #ccc; border-radius: 6px; }
+    #url { flex: 1; min-width: 220px; } #code { width: 120px; }
+    button { padding: 8px 14px; font-size: 1rem; border: 0; border-radius: 6px; background: #222; color: #fff; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; } td, th { text-align: left; padding: 8px 4px; border-bottom: 1px solid #eee; }
+    td.url { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555; }
+    #error { color: #b00; }
+  </style>
+</head>
+<body>
+  <h1>URL Shortener</h1>
+  <form id="add">
+    <input id="url" type="url" placeholder="https://example.com/a/long/path" required>
+    <input id="code" type="text" placeholder="custom (opt.)" pattern="[A-Za-z0-9_-]{3,16}">
+    <button type="submit">Shorten</button>
+  </form>
+  <p id="error"></p>
+  <table><thead><tr><th>Short</th><th>Target</th><th>Clicks</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+  <script>
+    const rows = document.getElementById("rows"), err = document.getElementById("error");
+    async function api(path, opts = {}) {
+      const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+      return r.status === 204 ? null : r.json();
+    }
+    function show(e) { err.textContent = "Error: " + (typeof e.message === "string" ? e.message : JSON.stringify(e.message)); }
+    async function load() {
+      try {
+        err.textContent = ""; rows.innerHTML = "";
+        for (const l of await api("/api/links")) {
+          const tr = document.createElement("tr");
+          const a = document.createElement("a"); a.href = "/" + l.code; a.textContent = "/" + l.code; a.target = "_blank";
+          const tdA = document.createElement("td"); tdA.append(a);
+          const tdU = document.createElement("td"); tdU.className = "url"; tdU.textContent = l.url;
+          const tdC = document.createElement("td"); tdC.textContent = l.clicks;
+          const del = document.createElement("button"); del.textContent = "Delete"; del.style.background = "#b00";
+          del.onclick = () => api("/api/links/" + l.code, { method: "DELETE" }).then(load).catch(show);
+          const tdD = document.createElement("td"); tdD.append(del);
+          tr.append(tdA, tdU, tdC, tdD); rows.append(tr);
+        }
+      } catch (e) { show(e); }
+    }
+    document.getElementById("add").onsubmit = async (e) => {
+      e.preventDefault();
+      const body = { url: document.getElementById("url").value };
+      const code = document.getElementById("code").value.trim(); if (code) body.code = code;
+      try { await api("/api/links", { method: "POST", body: JSON.stringify(body) }); e.target.reset(); load(); } catch (x) { show(x); }
+    };
+    load();
+  </script>
+</body>
+</html>
