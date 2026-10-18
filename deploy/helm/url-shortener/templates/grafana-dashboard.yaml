@@ -1,0 +1,14 @@
+{{- if and (include "url-shortener.monitoringEnabled" .) .Values.monitoring.dashboard.enabled }}
+# Picked up by the kube-prometheus-stack Grafana sidecar (label grafana_dashboard).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "url-shortener.fullname" . }}-dashboard
+  namespace: {{ .Values.monitoring.dashboard.namespace }}
+  labels:
+    {{- include "url-shortener.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  url-shortener.json: |-
+    {{- .Files.Get "files/dashboard.json" | replace "__NAMESPACE__" .Release.Namespace | replace "__ROUTES__" .Values.monitoring.slo.routeRegex | replace "__JOB__" (include "url-shortener.fullname" .) | nindent 4 }}
+{{- end }}

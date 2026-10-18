@@ -1,0 +1,23 @@
+# Local single-node kind cluster. NodePorts are published on 127.0.0.1 only,
+# so nothing is exposed beyond this machine.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: links
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080   # links app (Service type NodePort)
+        hostPort: 8081
+        listenAddress: 127.0.0.1
+      - containerPort: 30300   # Grafana
+        hostPort: 3001
+        listenAddress: 127.0.0.1
+      - containerPort: 30090   # Prometheus
+        hostPort: 9091
+        listenAddress: 127.0.0.1
+      - containerPort: 30093   # Alertmanager
+        hostPort: 9094
+        listenAddress: 127.0.0.1
+      - containerPort: 30686   # Jaeger UI
+        hostPort: 16687
+        listenAddress: 127.0.0.1

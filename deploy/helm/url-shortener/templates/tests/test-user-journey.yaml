@@ -1,0 +1,68 @@
+# `helm test <release>`: exercises the real user path through the Service
+# (shorten -> redirect -> click counted -> delete) from inside the cluster.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "url-shortener.fullname" . }}-test-journey
+  labels:
+    {{- include "url-shortener.labels" . | nindent 4 }}
+    # Selected by the test-only egress NetworkPolicy below.
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: journey
+      image: "{{ .Values.image.repository }}:{{ include "url-shortener.imageTag" . }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 200m
+          memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      env:
+        - name: BASE
+          value: "http://{{ include "url-shortener.fullname" . }}:{{ .Values.service.port }}"
+      command:
+        - python
+        - -c
+        - |
+          import json, os, urllib.request as u
+          from urllib.error import HTTPError
+          base = os.environ["BASE"]
+          class NoRedirect(u.HTTPRedirectHandler):
+              def redirect_request(self, *a, **k):
+                  return None
+          opener = u.build_opener(NoRedirect)
+          def call(method, path, body=None):
+              data = json.dumps(body).encode() if body is not None else None
+              req = u.Request(base + path, data=data, method=method,
+                              headers={"Content-Type": "application/json"})
+              try:
+                  r = opener.open(req, timeout=5)
+              except HTTPError as e:
+                  r = e
+              raw = r.read()
+              ctype = r.headers.get("content-type", "")
+              return r.status, (json.loads(raw) if raw and "json" in ctype else None), r.headers
+          s, v, _ = call("GET", "/version"); print("version", v); assert s == 200
+          s, link, _ = call("POST", "/api/links", {"url": "https://example.com/helm-test"}); assert s == 201
+          s, _, h = call("GET", "/" + link["code"]); assert s == 302 and h["location"] == "https://example.com/helm-test"
+          s, st, _ = call("GET", "/api/links/" + link["code"]); assert st["clicks"] == 1
+          s, _, _ = call("DELETE", "/api/links/" + link["code"]); assert s == 204
+          print("user journey OK")

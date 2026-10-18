@@ -1,0 +1,130 @@
+# promtool unit tests for the SLO alerts (run in CI: see .github/workflows/ci.yml).
+# They prove the alert logic fires on real failure patterns and stays quiet
+# when the service is healthy, before anything is deployed.
+rule_files:
+  - /tmp/links-rules.yaml
+evaluation_interval: 30s
+
+tests:
+  # 1. Healthy traffic: ~0.1% errors, nothing fires.
+  - interval: 30s
+    input_series:
+      - series: 'http_requests_total{job="links",namespace="links",route="/api/links",method="GET",status="200"}'
+        values: '0+999x240'
+      - series: 'http_requests_total{job="links",namespace="links",route="/api/links",method="GET",status="500"}'
+        values: '0+1x240'
+      - series: 'up{job="links",namespace="links",pod="links-a"}'
+        values: '1x240'
+      - series: 'links_db_up{job="links",namespace="links",pod="links-a"}'
+        values: '1x240'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LinksApiErrorBudgetFastBurn
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: LinksApiDown
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: LinksDatabaseUnreachable
+        exp_alerts: []
+
+  # 2. Half of requests fail for over an hour: fast-burn page fires.
+  - interval: 30s
+    input_series:
+      - series: 'http_requests_total{job="links",namespace="links",route="/api/links",method="GET",status="200"}'
+        values: '0+10x240'
+      - series: 'http_requests_total{job="links",namespace="links",route="/api/links",method="GET",status="503"}'
+        values: '0+10x240'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LinksApiErrorBudgetFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "Links API is burning its error budget fast"
+              description: "50% of SLO-route requests are failing (5xx)."
+              runbook_url: "https://github.com/sailingsam/cloudproject/blob/main/docs/RUNBOOK.md#linksapierrorbudgetfastburn"
+
+  # 3. Database unreachable for 2 minutes: page fires.
+  - interval: 30s
+    input_series:
+      - series: 'links_db_up{job="links",namespace="links",pod="links-a"}'
+        values: '1 1 0 0 0 0 0 0'
+      - series: 'links_db_up{job="links",namespace="links",pod="links-b"}'
+        values: '1 1 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: LinksDatabaseUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "Links API pods cannot reach PostgreSQL (readiness failing)"
+              runbook_url: "https://github.com/sailingsam/cloudproject/blob/main/docs/RUNBOOK.md#linksdatabaseunreachable"
+
+  # 4. No pod scraped: LinksApiDown fires after 2 minutes.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="links",namespace="links",pod="links-a"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: LinksApiDown
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "No Links API pod is being scraped successfully"
+              runbook_url: "https://github.com/sailingsam/cloudproject/blob/main/docs/RUNBOOK.md#linksapidown"
+
+  # 5. Slow responses: only ~50% under 300ms for 15 minutes.
+  - interval: 30s
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="links",namespace="links",route="/api/links",method="GET",le="0.3"}'
+        values: '0+5x60'
+      - series: 'http_request_duration_seconds_count{job="links",namespace="links",route="/api/links",method="GET"}'
+        values: '0+10x60'
+      - series: 'http_requests_total{job="links",namespace="links",route="/api/links",method="GET",status="200"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LinksApiLatencySLOBreach
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: "Fewer than 95% of SLO-route requests finish within 0.3s"
+              runbook_url: "https://github.com/sailingsam/cloudproject/blob/main/docs/RUNBOOK.md#linksapilatencyslobreach"
+
+  # 6. No 5xx at all: the error ratio must be 0, not empty (otherwise the
+  #    availability panel shows "No data" exactly when everything is fine).
+  - interval: 30s
+    input_series:
+      - series: 'http_requests_total{job="links",namespace="links",route="/api/links",method="GET",status="200"}'
+        values: '0+10x20'
+    promql_expr_test:
+      - expr: links:api_error_ratio:rate5m
+        eval_time: 8m
+        exp_samples:
+          - labels: 'links:api_error_ratio:rate5m'
+            value: 0
+
+  # 7. The redirect route "/{code}" is the main user path, so its 5xx must
+  #    burn the error budget too (not only /api/*).
+  - interval: 30s
+    input_series:
+      - series: 'http_requests_total{job="links",namespace="links",route="/{code}",method="GET",status="302"}'
+        values: '0+10x240'
+      - series: 'http_requests_total{job="links",namespace="links",route="/{code}",method="GET",status="500"}'
+        values: '0+10x240'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LinksApiErrorBudgetFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "Links API is burning its error budget fast"
+              description: "50% of SLO-route requests are failing (5xx)."
+              runbook_url: "https://github.com/sailingsam/cloudproject/blob/main/docs/RUNBOOK.md#linksapierrorbudgetfastburn"
