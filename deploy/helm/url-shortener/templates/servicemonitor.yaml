@@ -1,0 +1,17 @@
+{{- if include "url-shortener.monitoringEnabled" . }}
+# Tells the Prometheus Operator to scrape /metrics on every API pod.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "url-shortener.fullname" . }}
+  labels:
+    {{- include "url-shortener.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "url-shortener.apiSelectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.scrapeInterval }}
+{{- end }}
